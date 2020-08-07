@@ -160,6 +160,8 @@ typedef uint16_t dpdk_port_t;
                                    | DEV_TX_OFFLOAD_UDP_CKSUM    \
                                    | DEV_TX_OFFLOAD_IPV4_CKSUM)
 
+/* Maximum number of vlans for hardware filtering. */
+#define HW_VLAN_FILTER_SIZE 64
 
 static const struct rte_eth_conf port_conf = {
     .rxmode = {
@@ -523,6 +525,10 @@ struct netdev_dpdk {
          * otherwise interrupt mode is used. */
         bool requested_lsc_interrupt_mode;
         bool lsc_interrupt_mode;
+
+        /* Enable hw vlan filter */
+        int requested_vlan_filter;
+        uint16_t vlan_filter_list[HW_VLAN_FILTER_SIZE];
     );
 
     PADDED_MEMBERS(CACHE_LINE_SIZE,
@@ -1235,6 +1241,8 @@ common_construct(struct netdev *netdev, dpdk_port_t port_no,
     dev->requested_mtu = RTE_ETHER_MTU;
     dev->max_packet_len = MTU_TO_FRAME_LEN(dev->mtu);
     dev->requested_lsc_interrupt_mode = 0;
+    dev->requested_vlan_filter = 0;
+    memset(dev->vlan_filter_list, -1, sizeof(dev->vlan_filter_list));
     ovsrcu_index_init(&dev->vid, -1);
     dev->vhost_reconfigured = false;
     dev->attached = false;
@@ -1972,6 +1980,76 @@ netdev_dpdk_set_config(struct netdev *netdev, const struct smap *args,
     if (dev->requested_lsc_interrupt_mode != lsc_interrupt_mode) {
         dev->requested_lsc_interrupt_mode = lsc_interrupt_mode;
         netdev_request_reconfigure(netdev);
+    }
+
+    const char * va = smap_get(args, "vlans-allowed");
+    if(va) {
+        char *token, *saveptr;
+        int vlan_offload = rte_eth_dev_get_vlan_offload(dev->port_id) |
+                            ETH_VLAN_FILTER_OFFLOAD;
+        int diag = rte_eth_dev_set_vlan_offload(dev->port_id, vlan_offload);
+        if (diag < 0)
+            VLOG_ERR("hw vlan filter: enablement failed for port %s"
+                     "diag=%d\n", netdev_get_name(netdev), diag);
+        else
+            VLOG_INFO("hw vlan filter: enabled for port %s",
+                     netdev_get_name(netdev));
+
+        token = strtok_r((char*)va, ",", &saveptr);
+        for(int i = 0; i < dev->requested_vlan_filter; i++) {
+            rte_eth_dev_vlan_filter(dev->port_id, dev->vlan_filter_list[i], 0);
+            dev->vlan_filter_list[i] = -1;
+        }
+        dev->requested_vlan_filter = 0;
+
+        while(token && dev->requested_vlan_filter <= HW_VLAN_FILTER_SIZE) {
+            char * endptr;
+            int vlan_id = (int)strtol(token, &endptr, 0);
+            if (token == endptr) {
+                VLOG_WARN("hw vlan filter: conversion error for \"%s\"", token);
+            } else {
+                if(vlan_id >= 0 && vlan_id <= 4095){
+                    for(int i = 0; i < dev->requested_vlan_filter; i++) {
+                        if(dev->vlan_filter_list[i] == vlan_id) {
+                            VLOG_INFO("hw vlan filter: vlan id %i "
+                                      "already added, skipping", vlan_id);
+                            continue;
+                        }
+                    }
+                    err = rte_eth_dev_vlan_filter(dev->port_id, vlan_id, 1);
+                    if(err) {
+                        VLOG_ERR("hw vlan filter: Error "
+                                 "adding vlan %i to device %s",
+                                 vlan_id, netdev_get_name(netdev));
+                    } else {
+                        VLOG_DBG("hw vlan filter: Added vlan %i to device %s",
+                                 vlan_id, netdev_get_name(netdev));
+                    }
+                    dev->vlan_filter_list[dev->requested_vlan_filter] = vlan_id;
+                    dev->requested_vlan_filter++;
+                } else {
+                    VLOG_WARN("hw vlan filter: invalid vlan id: %i", vlan_id);
+                }
+            }
+            token = strtok_r(NULL, ",", &saveptr);
+        }
+        if(token) {
+            VLOG_WARN("hw vlan filter: too many vlans requested, "
+                      "skipping at %s", token);
+        }
+    } else {
+        for(int i = 0; i < dev->requested_vlan_filter; i++) {
+            rte_eth_dev_vlan_filter(dev->port_id, dev->vlan_filter_list[i], 0);
+            dev->vlan_filter_list[i] = -1;
+        }
+        dev->requested_vlan_filter = 0;
+
+        int vlan_offload = rte_eth_dev_get_vlan_offload(dev->port_id) &
+                             ~ETH_VLAN_FILTER_OFFLOAD;
+        int diag = rte_eth_dev_set_vlan_offload(dev->port_id, vlan_offload);
+        if (diag < 0)
+            VLOG_ERR("rx_vlan_filter_set(port_pi=%d, on=%d) failed "
+                     "diag=%d\n", dev->port_id, 0, diag);
     }
 
     rx_fc_en = smap_get_bool(args, "rx-flow-ctrl", false);

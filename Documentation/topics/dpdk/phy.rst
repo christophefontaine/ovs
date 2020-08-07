@@ -408,3 +408,17 @@ Command to set interrupt mode for a specific interface::
 
 Command to set polling mode for a specific interface::
     $ ovs-vsctl set interface <iface_name> options:dpdk-lsc-interrupt=false
+
+VLAN filter configuration
+-------------------------
+
+
+Note that the current hardware capabilities limit the number of vlans to 64
+on Intel Niantic based NICs (from X550 datasheet, table 1-6 Virtualization
+Features p 39)
+
+Command to enable hardware vlan filter for a specific interface::
+    $ ovs-vsctl set Interface <iface_name> options:vlans-allowed=42,100,101,102
+
+Command to disable hardware vlan filter::
+    $ ovs-vsctl remove Interface <iface_name> options vlans-allowed
