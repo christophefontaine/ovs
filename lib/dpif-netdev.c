@@ -85,8 +85,8 @@
 VLOG_DEFINE_THIS_MODULE(dpif_netdev);
 
 /* Auto Load Balancing Defaults */
-#define ALB_ACCEPTABLE_IMPROVEMENT       25
-#define ALB_PMD_LOAD_THRESHOLD           95
+#define ALB_IMPROVEMENT_THRESHOLD       25
+#define ALB_PMD_LOAD_TRIGGER           95
 #define ALB_PMD_REBALANCE_POLL_INTERVAL  1 /* 1 Min */
 #define MIN_TO_MSEC                  60000
 
@@ -300,6 +300,8 @@ struct pmd_auto_lb {
     bool is_enabled;            /* Current status of Auto load balancing. */
     uint64_t rebalance_intvl;
     uint64_t rebalance_poll_timer;
+    atomic_uint32_t rebalance_improv_threshold;
+    atomic_uint32_t rebalance_pmd_load_trigger;
 };
 
 /* Datapath based on the network device interface from netdev.h.
@@ -4234,8 +4236,12 @@ set_pmd_auto_lb(struct dp_netdev *dp)
         pmd_alb->is_enabled = enable_alb;
         if (pmd_alb->is_enabled) {
             VLOG_INFO("PMD auto load balance is enabled "
-                      "(with rebalance interval:%"PRIu64" msec)",
-                       pmd_alb->rebalance_intvl);
+                      "(with rebalance interval:%"PRIu64" msec - "
+                      "rebalance improvement threshold %"PRIu32" - %%"
+                      "rebalance cpu usage trigger %"PRIu32" %%)",
+                       pmd_alb->rebalance_intvl,
+                       pmd_alb->rebalance_improv_threshold,
+                       pmd_alb->rebalance_pmd_load_trigger);
         } else {
             pmd_alb->rebalance_poll_timer = 0;
             VLOG_INFO("PMD auto load balance is disabled");
@@ -4345,6 +4351,12 @@ dpif_netdev_set_config(struct dpif *dpif, const struct smap *other_config)
     if (pmd_alb->rebalance_intvl != rebalance_intvl) {
         pmd_alb->rebalance_intvl = rebalance_intvl;
     }
+
+    pmd_alb->rebalance_improv_threshold = smap_get_int(other_config,
+                "pmd-auto-lb-min-improvement", ALB_IMPROVEMENT_THRESHOLD);
+
+    pmd_alb->rebalance_pmd_load_trigger = smap_get_int(other_config,
+                "pmd-auto-lb-pmd-trigger", ALB_PMD_LOAD_TRIGGER);
 
     set_pmd_auto_lb(dp);
     return 0;
@@ -5674,7 +5686,7 @@ pmd_rebalance_dry_run(struct dp_netdev *dp)
             improvement =
                 ((curr_variance - new_variance) * 100) / curr_variance;
         }
-        if (improvement < ALB_ACCEPTABLE_IMPROVEMENT) {
+        if (improvement < dp->pmd_alb.rebalance_improv_threshold) {
             ret = false;
         }
     }
@@ -8725,7 +8737,7 @@ dp_netdev_pmd_try_optimize(struct dp_netdev_pmd_thread *pmd,
                 pmd_load = ((tot_proc * 100) / (tot_idle + tot_proc));
             }
 
-            if (pmd_load >= ALB_PMD_LOAD_THRESHOLD) {
+            if (pmd_load >= pmd_alb->rebalance_pmd_load_trigger) {
                 atomic_count_inc(&pmd->pmd_overloaded);
             } else {
                 atomic_count_set(&pmd->pmd_overloaded, 0);

@@ -654,7 +654,7 @@
         <p>
          Configures PMD Auto Load Balancing that allows automatic assignment of
          RX queues to PMDs if any of PMDs is overloaded (i.e. processing cycles
-         > 95%).
+         > other_config:pmd-auto-lb-threshold).
         </p>
         <p>
          It uses current scheme of cycle based assignment of RX queues that
@@ -688,6 +688,35 @@
          This option can be configured to avoid frequent trigger of auto load
          balancing of PMDs. For e.g. set the value (in min) such that it occurs
          once in few hours or a day or a week.
+        </p>
+      </column>
+      <column name="other_config" key="pmd-auto-lb-pmd-trigger"
+              type='{"type": "integer",
+                     "minInteger": 0, "maxInteger": 100}'>
+        <p>
+         Specifies the pmd load (% of used cycled) when a auto load balance
+         is triggerd. When this load is reached, it will trigger a request
+         to rebalance the different queues between the non-pinned pmds.
+        </p>
+        <p>
+         The default value is <code>95%</code>.
+        </p>
+      </column>
+      <column name="other_config" key="pmd-auto-lb-min-improvement"
+              type='{"type": "integer",
+                     "minInteger": 0, "maxInteger": 100}'>
+        <p>
+         When an auto load balance is triggerd, the new queue placement
+         will not be applied if the predicted cpu load improvement
+         is lower than this value.
+        </p>
+        <p>
+         Warning: setting this parameter to 0 will always apply the new
+         placement: the queues may be moved around the available PMDs
+         at each rebalance.
+        </p>
+        <p>
+         The default value is <code>25%</code>.
         </p>
       </column>
       <column name="other_config" key="userspace-tso-enable"
